@@ -131,7 +131,7 @@ def main():
     # --- 4. Pha 1: Pre-training (XE) với Validation ---
     print(f"Bắt đầu Pha 1: Pre-training (XE) trong {XE_EPOCHS} epochs...")
     optimizer_xe = Adam(model.parameters(), lr=1e-4) 
-    criterion = nn.CrossEntropyLoss(ignore_index=vocab.PAD_token).to(device) 
+    criterion = nn.CrossEntropyLoss(ignore_index=vocab.PAD_idx).to(device) 
     best_val_loss = float('inf')
 
     for epoch in range(XE_EPOCHS):
