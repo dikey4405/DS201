@@ -89,7 +89,7 @@ class COCODataset(Dataset):
         
         # Token hóa MỘT caption (caption đầu tiên) cho huấn luyện XE
         caption_xe = viet_captions_list[0]
-        tokens_xe = [self.vocabulary.word_to_idx.get(word, self.vocab.UNK_idx) 
+        tokens_xe = [self.vocabulary.word2idx.get(word, self.vocab.UNK_idx) 
                      for word in caption_xe.split()]
         tokens_xe = [self.vocabulary.SOS_idx] + tokens_xe + [self.vocab.EOS_idx]
         caption_tensor = torch.tensor(tokens_xe)
