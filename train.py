@@ -51,7 +51,35 @@ def evaluate_xe_loss(model, data_loader, criterion, device):
             loss = criterion(outputs.reshape(-1, outputs.size(-1)), targets.flatten())
             total_loss += loss.item()
     return total_loss / len(data_loader)
-
+    
+def evaluate_cider(model, data_loader, cider_reward_metric, vocab, device):
+    """
+    Chạy sinh caption trên tập Validation và tính điểm CIDEr.
+    Dùng Greedy Search (beam_size=1) để đánh giá nhanh.
+    """
+    model.eval()
+    all_rewards = []
+    
+    print("Evaluating CIDEr on Validation set...")
+    with torch.no_grad():
+        for _, V_raw, g_raw, _, _, gt_captions_list in data_loader:
+            V_raw, g_raw = V_raw.to(device), g_raw.to(device)
+            
+            # 1. Sinh caption (Greedy search: beam_size=1)
+            # Hàm sample trả về (B*1, T)
+            sampled_seqs, _ = model.sample(V_raw, g_raw, vocab, beam_size=1)
+            
+            # 2. Tính điểm CIDEr cho batch này
+            # rewards shape: (B, 1)
+            rewards = cider_reward_metric.compute(sampled_seqs, gt_captions_list, beam_size=1)
+            
+            all_rewards.append(rewards.cpu())
+            
+    all_rewards = torch.cat(all_rewards)
+    mean_cider = all_rewards.mean().item()
+    
+    return mean_cider
+    
 # --- HÀM TRAIN_SCST ---
 def train_scst(model, data_loader, optimizer, cider_reward_metric, vocab, device, beam_size=5):
     model.train()
@@ -132,34 +160,55 @@ def main():
     print(f"Bắt đầu Pha 1: Pre-training (XE) trong {XE_EPOCHS} epochs...")
     optimizer_xe = Adam(model.parameters(), lr=1e-4) 
     criterion = nn.CrossEntropyLoss(ignore_index=vocab.PAD_idx).to(device) 
-    best_val_loss = float('inf')
+    
+    # Khởi tạo metric để đánh giá
+    cider_metric = CIDErReward(vocab, device)
+    
+    # Thay đổi chiến lược lưu model
+    best_val_cider = 0.0 # Theo dõi CIDEr cao nhất thay vì Loss thấp nhất
 
     for epoch in range(XE_EPOCHS):
+        # 1. Train
         train_loss = train_xe(model, train_loader, optimizer_xe, criterion, device)
-        val_loss = evaluate_xe_loss(model, val_loader, criterion, device)
-        print(f"XE Epoch {epoch+1}/{XE_EPOCHS} - Train Loss: {train_loss:.4f} - Val Loss: {val_loss:.4f}")
         
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+        # 2. Evaluate Loss (Vẫn theo dõi để xem có bị exploding gradient không)
+        val_loss = evaluate_xe_loss(model, val_loader, criterion, device)
+        
+        # 3. Evaluate CIDEr (Quan trọng nhất)
+        val_cider = evaluate_cider(model, val_loader, cider_metric, vocab, device)
+        
+        print(f"XE Epoch {epoch+1}/{XE_EPOCHS} - Train Loss: {train_loss:.4f} - Val Loss: {val_loss:.4f} - Val CIDEr: {val_cider:.4f}")
+        
+        # 4. Lưu model dựa trên CIDEr cao nhất
+        if val_cider > best_val_cider:
+            best_val_cider = val_cider
             torch.save(model.state_dict(), BEST_XE_MODEL_PATH)
-            print(f"  -> Đã lưu mô hình XE tốt nhất: {BEST_XE_MODEL_PATH}")
+            print(f"  -> Đã lưu mô hình tốt nhất (New Best CIDEr): {BEST_XE_MODEL_PATH}")
             
     # --- 5. Pha 2: Fine-tuning (SCST) ---
     print(f"\nBắt đầu Pha 2: Fine-tuning (SCST) trong {SCST_EPOCHS} epochs...")
     
-    # Tải mô hình tốt nhất từ Pha 1
+    # Tải mô hình có CIDEr tốt nhất từ pha 1
     model.load_state_dict(torch.load(BEST_XE_MODEL_PATH))
     
-    optimizer_scst = Adam(model.parameters(), lr=5e-6) # Learning rate rất thấp
-    cider_metric = CIDErReward(vocab, device)
+    optimizer_scst = Adam(model.parameters(), lr=5e-6)
+    
+    # Reset best tracker cho pha SCST
+    best_scst_cider = best_val_cider 
     
     for epoch in range(SCST_EPOCHS):
-        # Lưu ý: SCST cần train_loader có chứa gt_captions (list string)
         scst_loss = train_scst(model, train_loader, optimizer_scst, cider_metric, vocab, device, beam_size=BEAM_SIZE_SCST)
-        print(f"SCST Epoch {epoch+1}/{SCST_EPOCHS} - SCST Loss: {scst_loss:.4f}")
         
-        # Lưu checkpoint SCST
-        torch.save(model.state_dict(), BEST_SCST_MODEL_PATH)
+        # Đánh giá lại trên tập Val sau mỗi epoch SCST
+        val_cider = evaluate_cider(model, val_loader, cider_metric, vocab, device)
+        
+        print(f"SCST Epoch {epoch+1}/{SCST_EPOCHS} - SCST Loss: {scst_loss:.4f} - Val CIDEr: {val_cider:.4f}")
+        
+        # Cũng lưu model SCST dựa trên CIDEr tốt nhất
+        if val_cider > best_scst_cider:
+            best_scst_cider = val_cider
+            torch.save(model.state_dict(), BEST_SCST_MODEL_PATH)
+            print(f"  -> Đã lưu mô hình SCST tốt nhất: {BEST_SCST_MODEL_PATH}")
 
     print("\nHoàn thành huấn luyện.")
     print(f"Mô hình SCST cuối cùng đã lưu tại: {BEST_SCST_MODEL_PATH}")
