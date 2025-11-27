@@ -102,10 +102,13 @@ def main():
     # --- 2. Chuẩn bị Dữ liệu và Từ vựng ---
     vocab = Vocabulary()
     try:
+        print(f"Đang đọc file caption từ: {CAPTION_TRAIN_JSON}")
         with open(CAPTION_TRAIN_JSON, 'r', encoding='utf-8') as f:
             raw_train_annotations = json.load(f)
+            
         all_train_captions = [item.get('translate') 
                               for item in raw_train_annotations if item.get('translate')]
+        
         vocab.build_vocab(all_train_captions)
         vocab_size = len(vocab)
         print(f"Xây dựng Vocab thành công: {vocab_size} từ.")
